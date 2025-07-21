@@ -64,7 +64,7 @@ def get_train_test_dataset(width, chroms, feature_names, DNA, DNA_features, ZDNA
     ints_in = np.array(ints_in)
     ints_out = np.array(ints_out)[np.random.choice(range(len(ints_out)), size=len(ints_in) * 3, replace=False)]
 
-    equalized = ints_in
+    equalized = np.vstack((ints_in, ints_out))
     equalized = [[inter[0], int(inter[1]), int(inter[2])] for inter in equalized]
 
     train_inds, test_inds = next(StratifiedKFold().split(equalized, [f"{int(i < 400)}_{elem[0]}"
