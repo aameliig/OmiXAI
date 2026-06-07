@@ -1,0 +1,28 @@
+# Core deep learning
+torch==2.1.2
+torchvision==0.16.2
+
+# PyTorch Geometric — CUDA version must match torch and the cluster CUDA toolkit.
+# For CUDA 11.8 (common on HPC clusters), install scatter/sparse first:
+#   pip install torch-scatter torch-sparse torch-cluster \
+#       -f https://data.pyg.org/whl/torch-2.1.2+cu118.html
+torch-geometric==2.4.0
+
+# XAI attribution
+captum==0.7.0
+
+# Data & ML
+numpy==1.24.4
+pandas==2.0.3
+scikit-learn==1.3.2
+scipy==1.11.4
+joblib==1.3.2
+
+# Visualisation
+matplotlib==3.7.5
+seaborn==0.13.2
+
+# Notebooks & utilities
+tqdm==4.66.1
+ipython==8.18.1
+ipykernel==6.28.0

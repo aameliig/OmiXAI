@@ -1,0 +1,33 @@
+# model weights — store separately, do not commit large binaries
+weights/*.pt
+weights/*.pth
+weights/*.bin
+
+# data — too large for git
+z_dna/
+data/*.npy
+data/*.npz
+data/*.h5
+
+# results — generated files
+results/
+*.npy
+*.pt
+*.pth
+
+# Python
+__pycache__/
+*.py[cod]
+.eggs/
+*.egg-info/
+dist/
+build/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# env
+.env
+venv/
+.venv/
