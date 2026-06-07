@@ -35,6 +35,14 @@ flowchart TD
 
 ---
 
+## Data
+
+Genomic data: [vladislareon/z_dna](https://github.com/vladislareon/z_dna)
+
+The `.pkl` files use [SparseVector](https://github.com/Nazar1997/Sparse_vector) format — included in `requirements.txt`, installed automatically.
+
+---
+
 ## Installation
 
 ```bash
@@ -45,11 +53,9 @@ pip install torch==2.1.2 torchvision==0.16.2 --index-url https://download.pytorc
 pip install torch-scatter torch-sparse torch-cluster \
     -f https://data.pyg.org/whl/torch-2.1.2+cu118.html
 
-# 3. Everything else
+# 3. Everything else (includes SparseVector)
 pip install -r requirements.txt
 ```
-
-> **HPC note:** if you use environment modules (`module load cuda/11.8`), set `CUDA_HOME` before installing PyG wheels.
 
 ---
 

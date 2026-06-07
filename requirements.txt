@@ -26,3 +26,6 @@ seaborn==0.13.2
 tqdm==4.66.1
 ipython==8.18.1
 ipykernel==6.28.0
+
+# Genomic data format — required to deserialize hg38_* pkl files
+git+https://github.com/Nazar1997/Sparse_vector.git@master
