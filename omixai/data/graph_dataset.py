@@ -41,7 +41,7 @@ class GraphGenomicDataset(Dataset):
         self.features_source = features_source
         self.labels = labels
         self.intervals = intervals
-        self._encoder = LabelBinarizer().fit([["A"], ["C"], ["T"], ["G"]])
+        self._encoder = LabelBinarizer().fit(np.array([["A"], ["C"], ["T"], ["G"]]))
         self._edge_index = _linear_edge_index(width)
         super().__init__(root=None)
 

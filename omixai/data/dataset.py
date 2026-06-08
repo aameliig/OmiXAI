@@ -37,7 +37,7 @@ class GenomicDataset(data.Dataset):
         self.features_source = features_source
         self.labels_source = labels_source
         self.intervals = intervals
-        self._encoder = LabelBinarizer().fit([["A"], ["C"], ["T"], ["G"]])
+        self._encoder = LabelBinarizer().fit(np.array([["A"], ["C"], ["T"], ["G"]]))
 
     def __len__(self) -> int:
         return len(self.intervals)
