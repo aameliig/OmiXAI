@@ -1,11 +1,15 @@
+# PyTorch Geometric wheels depend on torch + CUDA version — install separately:
+#   pip install torch-scatter torch-sparse torch-cluster \
+#       -f https://data.pyg.org/whl/torch-2.1.2+cu118.html
+#   pip install torch-geometric==2.4.0
+#
+# SparseVector is not a pip package — clone manually:
+#   git clone https://github.com/Nazar1997/Sparse_vector.git ~/Sparse_vector
+#   export PYTHONPATH=$HOME/Sparse_vector:$PYTHONPATH
+
 # Core deep learning
 torch==2.1.2
 torchvision==0.16.2
-
-# PyTorch Geometric — CUDA version must match torch and the cluster CUDA toolkit.
-# For CUDA 11.8 (common on HPC clusters), install scatter/sparse first:
-#   pip install torch-scatter torch-sparse torch-cluster \
-#       -f https://data.pyg.org/whl/torch-2.1.2+cu118.html
 torch-geometric==2.4.0
 
 # XAI attribution
@@ -26,6 +30,3 @@ seaborn==0.13.2
 tqdm==4.66.1
 ipython==8.18.1
 ipykernel==6.28.0
-
-# Genomic data format — required to deserialize hg38_* pkl files
-git+https://github.com/Nazar1997/Sparse_vector.git@master

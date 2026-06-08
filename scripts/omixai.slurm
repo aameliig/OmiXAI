@@ -10,14 +10,15 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 
-MODULE_CUDA=cuda/11.8
 CONDA_ENV=omixai
 PROJECT_DIR=$HOME/OmiXAI
 WEIGHTS=$HOME/weights/graphmzc.pt
 DATA_DIR=$HOME/DNA
 
-module load $MODULE_CUDA
 conda activate $CONDA_ENV
+
+# SparseVector: not a pip package, add to Python path
+export PYTHONPATH=$HOME/Sparse_vector:$PYTHONPATH
 
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results
 
