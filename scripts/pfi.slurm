@@ -13,7 +13,7 @@ CONDA_ENV=omixai
 PROJECT_DIR=$HOME/OmiXAI
 
 conda activate $CONDA_ENV
-export PYTHONPATH=$HOME/Sparse_vector:$PYTHONPATH
+export PYTHONPATH=$HOME/DNA/Sparse_vector:$PYTHONPATH
 
 cd $PROJECT_DIR
 

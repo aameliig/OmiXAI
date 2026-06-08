@@ -17,8 +17,8 @@ DATA_DIR=$HOME/DNA
 
 conda activate $CONDA_ENV
 
-# SparseVector: not a pip package, add to Python path
-export PYTHONPATH=$HOME/Sparse_vector:$PYTHONPATH
+# SparseVector lives inside the DNA folder
+export PYTHONPATH=$HOME/DNA/Sparse_vector:$PYTHONPATH
 
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results
 
