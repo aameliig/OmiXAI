@@ -74,8 +74,8 @@ def get_train_test_split(
     """
     pos, neg = [], []
     for chrom in chroms:
-        for start in trange(0, labels[chrom].shape[0] - width, width, desc=chrom):
-            interval = [chrom, start, min(start + width, labels[chrom].shape[0])]
+        for start in trange(0, labels[chrom].shape - width, width, desc=chrom):
+            interval = [chrom, start, min(start + width, labels[chrom].shape)]
             (pos if labels[chrom][start : start + width].any() else neg).append(interval)
 
     neg = np.array(neg)[
