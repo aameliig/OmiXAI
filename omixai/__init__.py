@@ -1,3 +1,18 @@
 from .pipeline import OmiXAI
+from .models import ConvMZC, GraphMZC
+from .data import GenomicDataset, GraphGenomicDataset, get_train_test_split, get_train_test_split_graph
+from .training import train_cnn, evaluate_cnn, train_gnn, evaluate_gnn
 
-__all__ = ["OmiXAI"]
+__all__ = [
+    "OmiXAI",
+    "ConvMZC",
+    "GraphMZC",
+    "GenomicDataset",
+    "GraphGenomicDataset",
+    "get_train_test_split",
+    "get_train_test_split_graph",
+    "train_cnn",
+    "evaluate_cnn",
+    "train_gnn",
+    "evaluate_gnn",
+]
