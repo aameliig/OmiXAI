@@ -218,10 +218,17 @@ class OmiXAI:
         }[method](self.model)
 
     def _build_gnn_explainer(self, method: str) -> Explainer:
+        captum_names = {
+            "IG":     "IntegratedGradients",
+            "IxG":    "InputXGradient",
+            "GB":     "GuidedBackprop",
+            "Deconv": "Deconvolution",
+            "Saliency": "Saliency",
+        }
         algo = (
             GNNExplainer(epochs=50)
             if method == "GNNExplainer"
-            else CaptumExplainer("Saliency" if method == "Saliency" else method)
+            else CaptumExplainer(captum_names[method])
         )
         return Explainer(
             model=self.model,
