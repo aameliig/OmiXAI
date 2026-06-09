@@ -2,9 +2,9 @@
 OmiXAI — ensemble XAI pipeline for CNN and GNN models trained on genomic features.
 
 Workflow:
-    1. OmiXAI(model, model_type, n_features)
-    2. .interpret(*loaders, methods, width)   → attribution dict
-    3. .rank_features(feature_names)          → ranked DataFrame
+    1. OmiXAI(model, n_features)          # model_type auto-detected
+    2. .interpret(*loaders, methods, width)
+    3. .rank_features(feature_names)
 """
 
 from __future__ import annotations
@@ -16,41 +16,68 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from captum.attr import Deconvolution, GuidedBackprop, InputXGradient, IntegratedGradients
+from torch_geometric.nn import MessagePassing
 from torch_geometric.explain import CaptumExplainer, Explainer, GNNExplainer
 
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# first 4 channels in the feature tensor are one-hot DNA (A/T/G/C)
-_DNA_CHANNELS = 4
 
 CNN_METHODS = ("IG", "IxG", "GB", "Deconv")
 GNN_METHODS = ("IG", "IxG", "GB", "Deconv", "Saliency", "GNNExplainer")
 
 
+def detect_model_type(model: nn.Module) -> str:
+    """
+    Infer whether a model is CNN or GNN by inspecting its layer types.
+
+    Any module that subclasses torch_geometric.nn.MessagePassing is treated
+    as a GNN layer. nn.Conv2d presence indicates a CNN.
+    Falls back to ValueError if neither is found.
+    """
+    for module in model.modules():
+        if isinstance(module, MessagePassing):
+            return "gnn"
+    for module in model.modules():
+        if isinstance(module, nn.Conv2d):
+            return "cnn"
+    raise ValueError(
+        "Cannot detect model type automatically. "
+        "Pass model_type='cnn' or model_type='gnn' explicitly."
+    )
+
+
 class OmiXAI:
     """
+    Ensemble XAI pipeline for CNN and GNN models.
+
     Parameters
     ----------
-    model       : trained PyTorch model (ConvMZC or GraphMZC)
-    model_type  : 'cnn' or 'gnn'
-    n_features  : number of omics / k-mer features (excluding one-hot DNA channels)
-    device      : defaults to CUDA if available
+    model           : trained PyTorch model
+    n_features      : number of features to attribute (after any skip channels)
+    model_type      : 'cnn' or 'gnn'; auto-detected if omitted
+    n_skip_features : leading feature channels to ignore during attribution
+                      (e.g. 4 for one-hot DNA encoding A/T/G/C).
+                      Set to 0 if your input contains only the features you
+                      want to rank — no skipping will be applied.
+    device          : defaults to CUDA if available
     """
 
     def __init__(
         self,
         model: nn.Module,
-        model_type: str,
         n_features: int,
+        model_type: str | None = None,
+        n_skip_features: int = 4,
         device: torch.device | None = None,
     ) -> None:
-        if model_type not in ("cnn", "gnn"):
+        self.device = device or _DEVICE
+        self.model  = model.to(self.device).eval()
+        self.model_type = model_type or detect_model_type(model)
+
+        if self.model_type not in ("cnn", "gnn"):
             raise ValueError("model_type must be 'cnn' or 'gnn'")
 
-        self.device = device or _DEVICE
-        self.model = model.to(self.device).eval()
-        self.model_type = model_type
-        self.n_features = n_features
+        self.n_features      = n_features
+        self.n_skip_features = n_skip_features
         self._scores: dict[str, np.ndarray] = {}
 
     # ------------------------------------------------------------------
@@ -67,14 +94,17 @@ class OmiXAI:
         """
         Compute mean attribution vectors over True Positive predictions.
 
-        Pass both train and test loaders to use all available True Positives:
+        Pass both train and test loaders to cover all True Positives:
             pipeline.interpret(train_loader, test_loader, width=100)
+
+        For train-only interpretation (cleaner for feature selection):
+            pipeline.interpret(train_loader, width=100)
 
         Parameters
         ----------
-        *loaders    : DataLoader(s) — (x, y) for CNN or PyG Data for GNN
-        methods     : attribution methods; defaults to all for the model type
-        width       : sequence window length in nucleotides
+        *loaders    : DataLoader(s) — (x, y) tuples for CNN or PyG Data for GNN
+        methods     : attribution methods to run; defaults to all for model type
+        width       : sequence window length in nucleotides (or time steps)
         n_steps_ig  : integration steps for Integrated Gradients (default 50)
 
         Returns
@@ -82,7 +112,7 @@ class OmiXAI:
         dict  method_name → mean attribution array of shape (n_features,)
         """
         available = CNN_METHODS if self.model_type == "cnn" else GNN_METHODS
-        methods = list(methods or available)
+        methods   = list(methods or available)
 
         unknown = [m for m in methods if m not in available]
         if unknown:
@@ -94,7 +124,6 @@ class OmiXAI:
         for name in methods:
             total = np.zeros(self.n_features, dtype=np.float64)
             count = 0
-
             for loader in loaders:
                 t, c = (
                     self._run_cnn(loader, name, width, n_steps_ig)
@@ -103,7 +132,6 @@ class OmiXAI:
                 )
                 total += t
                 count += c
-
             self._scores[name] = total / max(count, 1)
             print(f"{name}: averaged over {count} TP regions")
 
@@ -117,8 +145,8 @@ class OmiXAI:
         """
         Apply hybrid ranking to stored (or provided) attribution scores.
 
-        For each method the per-feature percentage deviation from the method mean
-        is computed, then averaged across methods. Features are sorted in
+        Each method's scores are converted to percentage deviations from the
+        method mean, then averaged across methods. Features are sorted in
         descending order (higher = more important).
 
         Returns
@@ -153,22 +181,22 @@ class OmiXAI:
         count = 0
 
         for x, y_true in tqdm(loader, desc=f"CNN/{method}", leave=False):
-            x = x.to(self.device)
+            x      = x.to(self.device)
             y_true = y_true.to(self.device).long()
 
             with torch.no_grad():
-                out = self.model(x)
+                out  = self.model(x)
                 pred = torch.argmax(out, dim=1).reshape(1, width)
 
             tp = [i for i in range(width) if pred[0][i] == y_true[0][i] == 1]
             if not tp:
                 continue
 
-            attrs = self._captum_attr(explainer, x, method, n_steps_ig)
-            attrs = torch.squeeze(attrs, dim=0)
-            tp_mean = attrs[tp, _DNA_CHANNELS:].mean(dim=0)
-            total += tp_mean.cpu().detach().numpy()
-            count += 1
+            attrs   = self._captum_attr(explainer, x, method, n_steps_ig)
+            attrs   = torch.squeeze(attrs, dim=0)
+            tp_mean = attrs[tp, self.n_skip_features:].mean(dim=0)
+            total  += tp_mean.cpu().detach().numpy()
+            count  += 1
 
         return total, count
 
@@ -182,15 +210,15 @@ class OmiXAI:
         count = 0
 
         for dt in tqdm(loader, desc=f"GNN/{method}", leave=False):
-            x = dt.x.to(self.device)
+            x    = dt.x.to(self.device)
             edge = dt.edge_index.to(self.device)
-            y = dt.y.to(self.device).long()
+            y    = dt.y.to(self.device).long()
 
             valid = (edge < width).all(dim=0)
-            edge = edge[:, valid]
+            edge  = edge[:, valid]
 
             with torch.no_grad():
-                out = self.model(x, edge.squeeze())
+                out  = self.model(x, edge.squeeze())
                 pred = torch.argmax(out, dim=-1)
 
             tp = [i for i in range(width) if pred[0][i] == y[0][i] == 1]
@@ -198,10 +226,10 @@ class OmiXAI:
                 continue
 
             explanation = explainer_obj(x.squeeze(), edge)
-            mask = explanation.node_mask  # (width, n_features + _DNA_CHANNELS)
-            tp_mean = mask[tp, _DNA_CHANNELS:].mean(dim=0)
-            total += tp_mean.cpu().detach().numpy()
-            count += 1
+            mask    = explanation.node_mask
+            tp_mean = mask[tp, self.n_skip_features:].mean(dim=0)
+            total  += tp_mean.cpu().detach().numpy()
+            count  += 1
 
         return total, count
 
@@ -218,10 +246,17 @@ class OmiXAI:
         }[method](self.model)
 
     def _build_gnn_explainer(self, method: str) -> Explainer:
+        _captum_names = {
+            "IG":       "IntegratedGradients",
+            "IxG":      "InputXGradient",
+            "GB":       "GuidedBackprop",
+            "Deconv":   "Deconvolution",
+            "Saliency": "Saliency",
+        }
         algo = (
             GNNExplainer(epochs=50)
             if method == "GNNExplainer"
-            else CaptumExplainer("Saliency" if method == "Saliency" else method)
+            else CaptumExplainer(_captum_names[method])
         )
         return Explainer(
             model=self.model,

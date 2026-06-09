@@ -14,6 +14,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
 
@@ -23,13 +24,17 @@ import torch
 from scipy.stats import spearmanr
 
 
-def load_old_ranking(old_dir: str, features_dir: str) -> pd.Series:
+def load_old_ranking(old_dir: str, feature_names: list[str]) -> pd.Series:
     """
     Reconstruct hybrid ranking from saved .pt / .npy attribution tensors
     (original results computed on train + test TPs).
+
+    feature_names must be in the SAME order the old tensors were computed in
+    (i.e. the model's training feature order). Pass results/feature_names.json
+    rather than re-deriving from os.listdir, whose order is not guaranteed to
+    match across machines.
     """
     old_dir = Path(old_dir)
-    feature_names = [f[:-4] for f in os.listdir(features_dir) if f.endswith(".pkl")]
 
     scores = {}
     for f in sorted(old_dir.glob("*.pt")):
@@ -60,9 +65,19 @@ def load_old_ranking(old_dir: str, features_dir: str) -> pd.Series:
     return pct["mean_deviation"].sort_values(ascending=False)
 
 
+def _resolve_feature_names(args) -> list[str]:
+    if args.feature_names:
+        return json.loads(Path(args.feature_names).read_text())
+    print("WARNING: --feature_names not given; deriving order from os.listdir. "
+          "This is only correct if it matches the original training order.")
+    return [f[:-4] for f in os.listdir(args.features) if f.endswith(".pkl")]
+
+
 def main(args):
+    feature_names = _resolve_feature_names(args)
+
     print("Loading old ranking (train + test TPs)...")
-    old_rank = load_old_ranking(args.old_dir, args.features)
+    old_rank = load_old_ranking(args.old_dir, feature_names)
 
     print("Loading new ranking (train TPs only)...")
     new_df   = pd.read_csv(args.new_csv, index_col=0)
@@ -99,5 +114,8 @@ if __name__ == "__main__":
     parser.add_argument("--new_csv",  required=True,
                         help="new ranking CSV (results/omixai_ranking.csv)")
     parser.add_argument("--features", required=True,
-                        help="path to hg38_features/sparse/ (to get feature names)")
+                        help="path to hg38_features/sparse/ (fallback source of feature names)")
+    parser.add_argument("--feature_names", default=None,
+                        help="results/feature_names.json — canonical feature order "
+                             "(preferred over deriving from --features)")
     main(parser.parse_args())

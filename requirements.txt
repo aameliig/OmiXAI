@@ -1,27 +1,28 @@
-# PyTorch Geometric wheels — URL depends on torch + CUDA version.
-# Change cu118 to cu121 if your CUDA is 12.x
---find-links https://data.pyg.org/whl/torch-2.1.2+cu118.html
+# PyTorch Geometric wheels — URL must match torch + CUDA version.
+# HSE cluster (module Python/Google_Colab_GPU_2024): torch 2.5.1 + CUDA 12.4
+--find-links https://data.pyg.org/whl/torch-2.5.1+cu124.html
 torch-scatter
 torch-sparse
 torch-cluster
-torch-geometric==2.4.0
+torch-geometric
 
 # Core deep learning
-torch==2.1.2
-torchvision==0.16.2
+# HSE cluster: torch 2.5.1 available via module load Python/Google_Colab_GPU_2024
+torch==2.5.1
+torchvision==0.20.1
 
 # XAI attribution
-captum==0.7.0
+captum
 
 # Data & ML
-numpy==1.24.4
-pandas==2.0.3
-scikit-learn==1.3.2
-scipy==1.11.4
-joblib==1.3.2
+numpy==1.26.4
+pandas==2.2.2
+scikit-learn==1.5.2
+scipy==1.13.1
+joblib==1.4.2
 
 # Visualisation
-matplotlib==3.7.5
+matplotlib==3.8.0
 seaborn==0.13.2
 
-tqdm==4.66.1
+tqdm==4.66.6

@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -78,19 +79,43 @@ def run_pfi(rf, X_test, y_test, n_repeats: int = 10, n_jobs: int = -1) -> np.nda
 def compare_with_omixai(
     pfi_scores: np.ndarray,
     omixai_path: str,
-    feature_names: list[str] | None = None,
+    feature_names: list[str],
     top_k_values: tuple[int, ...] = (50, 100, 300, 500),
 ) -> dict:
-    omixai_df = pd.read_csv(omixai_path, index_col=0)
-    omixai_scores = omixai_df["mean_deviation"].values
+    """
+    Align PFI scores with the OmiXAI ranking BY FEATURE NAME, then compare.
 
-    rho, pval = spearmanr(omixai_scores, pfi_scores)
+    omixai_ranking.csv is sorted by importance, so its row order is the ranking,
+    NOT the feature order. pfi_scores, in contrast, is in feature-matrix column
+    order (== feature_names). Comparing them positionally (the previous bug)
+    correlates unrelated features. We therefore index both by feature name and
+    intersect.
+    """
+    if len(feature_names) != len(pfi_scores):
+        raise ValueError(
+            f"feature_names ({len(feature_names)}) and pfi_scores "
+            f"({len(pfi_scores)}) lengths differ — wrong feature_names.json?"
+        )
 
-    omixai_order = np.argsort(omixai_scores)[::-1]
-    pfi_order = np.argsort(pfi_scores)[::-1]
+    omixai_df  = pd.read_csv(omixai_path, index_col=0)          # index = feature name
+    pfi_series = pd.Series(pfi_scores, index=feature_names)     # index = feature name
 
+    common = omixai_df.index.intersection(pfi_series.index)
+    if len(common) == 0:
+        raise ValueError(
+            "No overlapping feature names between OmiXAI ranking and PFI — "
+            "feature_names.json does not match the ranking CSV."
+        )
+
+    omixai_common = omixai_df.loc[common, "mean_deviation"]
+    pfi_common    = pfi_series.loc[common]
+
+    rho, pval = spearmanr(omixai_common.values, pfi_common.values)
+
+    omixai_top = omixai_common.sort_values(ascending=False).index
+    pfi_top    = pfi_common.sort_values(ascending=False).index
     overlap = {
-        k: len(set(omixai_order[:k]) & set(pfi_order[:k])) / k
+        k: len(set(omixai_top[:k]) & set(pfi_top[:k])) / k
         for k in top_k_values
     }
 
@@ -98,14 +123,13 @@ def compare_with_omixai(
         "spearman_rho": float(rho),
         "spearman_pval": float(pval),
         "overlap_at_k": overlap,
-        "omixai_scores": omixai_scores,
-        "pfi_scores": pfi_scores,
+        "n_common": int(len(common)),
     }
 
 
 def print_results(stats: dict) -> None:
     print(f"\nSpearman ρ (OmiXAI vs PFI-RF) = {stats['spearman_rho']:.3f}  "
-          f"(p = {stats['spearman_pval']:.2e})")
+          f"(p = {stats['spearman_pval']:.2e})   [{stats['n_common']} common features]")
     print("\nFeature overlap  OmiXAI ∩ PFI-RF:")
     for k, frac in stats["overlap_at_k"].items():
         print(f"  top-{k:>4} :  {frac:.1%}  ({int(frac * k)}/{k} features)")
@@ -119,7 +143,23 @@ def main(args):
 
     print("Loading data...")
     X, y = load_data(args.features, args.labels)
-    print(f"  X shape: {X.shape}, positives: {y.sum()}/{len(y)}")
+    pos_frac = y.sum() / len(y)
+    print(f"  X shape: {X.shape}, positives: {y.sum()}/{len(y)} ({pos_frac:.1%})")
+    if pos_frac > 0.5:
+        print("  WARNING: >50% positive. labels_flat.npy looks positive-skewed "
+              "(the balanced test split should be ~25%). You are likely running on "
+              "a STALE feature_matrix_flat.npy/labels_flat.npy — regenerate them "
+              "with run_omixai_gnn.py before trusting these PFI numbers.")
+
+    feature_names = None
+    if args.feature_names:
+        feature_names = json.loads(Path(args.feature_names).read_text())
+        if len(feature_names) != X.shape[1]:
+            raise ValueError(
+                f"feature_names ({len(feature_names)}) != matrix columns "
+                f"({X.shape[1]}). The matrix and feature_names.json are from "
+                f"different runs."
+            )
 
     X_train, X_test, y_train, y_test = train_test_split(
         X, y, test_size=0.2, stratify=y, random_state=42
@@ -138,17 +178,25 @@ def main(args):
     # intrinsic RF importance (fast, for reference)
     np.save(out / "rf_impurity_scores.npy", rf.feature_importances_)
 
-    if args.omixai:
-        print("Comparing with OmiXAI ranking...")
-        stats = compare_with_omixai(pfi_scores, args.omixai)
-        print_results(stats)
+    summary = pd.DataFrame({
+        "pfi_rf_importance": pfi_scores,
+        "rf_impurity": rf.feature_importances_,
+    })
+    if feature_names is not None:
+        summary.index = feature_names          # name-indexed for downstream joins
+        summary.index.name = "feature"
+    summary.to_csv(out / "pfi_rf_summary.csv")
+    print(f"  Saved → {out}/pfi_rf_summary.csv")
 
-        summary = pd.DataFrame({
-            "pfi_rf_importance": pfi_scores,
-            "rf_impurity": rf.feature_importances_,
-        })
-        summary.to_csv(out / "pfi_rf_summary.csv")
-        print(f"  Saved → {out}/pfi_rf_summary.csv")
+    if args.omixai:
+        if feature_names is None:
+            raise ValueError(
+                "--omixai comparison requires --feature_names (results/feature_names.json) "
+                "to align PFI scores with the ranking by feature name."
+            )
+        print("Comparing with OmiXAI ranking...")
+        stats = compare_with_omixai(pfi_scores, args.omixai, feature_names)
+        print_results(stats)
 
 
 if __name__ == "__main__":
@@ -156,6 +204,9 @@ if __name__ == "__main__":
     parser.add_argument("--features",  required=True, help="path to feature matrix (.npy), shape (n_intervals, n_features)")
     parser.add_argument("--labels",    required=True, help="path to label vector (.npy), shape (n_intervals,)")
     parser.add_argument("--omixai",    default=None,  help="path to OmiXAI ranking CSV (results/omixai_ranking.csv)")
+    parser.add_argument("--feature_names", default=None,
+                        help="results/feature_names.json — canonical feature order "
+                             "matching the matrix columns (required for --omixai compare)")
     parser.add_argument("--n_repeats", type=int, default=10)
     parser.add_argument("--out_dir",   default="results/")
     main(parser.parse_args())

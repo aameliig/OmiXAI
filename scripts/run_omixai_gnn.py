@@ -60,7 +60,13 @@ def load_all_data(data_dir: str):
     ZDNA = load(zdna_path)
 
     print("Loading omics features...")
-    feature_names = sorted(f[:-4] for f in os.listdir(features_dir) if f.endswith(".pkl"))
+    # IMPORTANT: keep the raw os.listdir order. The trained weights were produced
+    # with features in this exact (unsorted) order — see the original notebooks,
+    # which used `[i[:-4] for i in os.listdir(...)]` with no sorting. Sorting here
+    # would permute the model's input columns relative to the weights and silently
+    # corrupt every attribution. The canonical order is persisted to
+    # feature_names.json (see main) so all downstream scripts align to it.
+    feature_names = [f[:-4] for f in os.listdir(features_dir) if f.endswith(".pkl")]
     DNA_features  = {feat: load(os.path.join(features_dir, f"{feat}.pkl"))
                      for feat in tqdm(feature_names)}
 
@@ -140,6 +146,15 @@ def main(args):
                        test_dataset.intervals,
                        feature_names)
 
+    # Persist the canonical feature order. Every downstream script (PFI compare,
+    # retrain top-k, old/new comparison) must load THIS file rather than re-deriving
+    # feature_names from os.listdir — otherwise feature index i means different
+    # things in different scripts and the rankings silently misalign.
+    import json
+    (out / "feature_names.json").write_text(json.dumps(feature_names))
+    print(f"Saved canonical feature order ({len(feature_names)} features) "
+          f"→ {out}/feature_names.json")
+
     # Filter train dataset to positive intervals only (intervals containing Z-DNA).
     # Interpretation only makes sense for True Positives, and iterating over
     # negative intervals wastes GPU time with no useful TP signal.
@@ -177,15 +192,29 @@ def main(args):
     ranking.to_csv(out / "omixai_ranking.csv")
     print(f"\nTop 20 features:\n{ranking.head(20).to_string()}")
 
-    # -- flat matrix for RF-PFI --
-    print("\nBuilding flat feature matrix for RF-PFI...")
+    # -- flat matrix for RF-PFI (built from the BALANCED test split) --
+    # Column order matches feature_names (DNA channels 0:4 dropped), so the PFI
+    # scores produced from this matrix align 1:1 with feature_names.json.
+    print("\nBuilding flat feature matrix for RF-PFI (interval-level labels)...")
     X_list, y_list = [], []
     for i in tqdm(range(len(test_dataset))):
         item = test_dataset.get(i)
         X_list.append(item.x.squeeze(0)[:, 4:].numpy().mean(axis=0))
+        # label = 1 if the interval contains ANY Z-DNA nucleotide. Class 1 = Z-DNA.
         y_list.append(int(item.y.squeeze(0).numpy().any()))
+
+    y_arr = np.array(y_list, dtype=np.int32)
+    pos_frac = float(y_arr.mean()) if len(y_arr) else 0.0
+    print(f"Flat matrix: {len(y_arr)} intervals, "
+          f"{int(y_arr.sum())} positive (class 1 = Z-DNA) = {pos_frac:.1%}")
+    if pos_frac > 0.5:
+        print("WARNING: >50% positive. The test split is 1:3 balanced and should "
+              "be ~25% positive. A positive-skewed matrix means it was built over "
+              "the positive-only interpretation set (or a stale file is present). "
+              "Delete old feature_matrix_flat.npy/labels_flat.npy and rerun.")
+
     np.save(out / "feature_matrix_flat.npy", np.array(X_list, dtype=np.float32))
-    np.save(out / "labels_flat.npy",         np.array(y_list, dtype=np.int32))
+    np.save(out / "labels_flat.npy",         y_arr)
     print(f"Done. Results in {out}/")
 
 

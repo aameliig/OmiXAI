@@ -1,11 +1,22 @@
+import os
 import time
 
-import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn as nn
-from IPython.display import clear_output
 from sklearn.metrics import f1_score, precision_score, recall_score, roc_auc_score
+
+# optional: IPython / matplotlib only available in notebooks
+try:
+    from IPython.display import clear_output as _clear_output
+    import matplotlib.pyplot as plt
+    _INTERACTIVE = True
+except ImportError:
+    _INTERACTIVE = False
+
+def _clear():
+    if _INTERACTIVE:
+        _clear_output()
 
 _DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -131,9 +142,10 @@ def train(model, optimizer, n_epochs: int, train_loader, test_loader, width: int
         for k in history:
             history[k].append(val[k])
 
-        clear_output()
-        _plot(train_f1_log, history["f1"], "F1", len(tr["f1"]))
-        _plot(tr["auc"], [val["auc"]] * len(tr["auc"]), "AUC", len(tr["auc"]))
+        _clear()
+        if _INTERACTIVE:
+            _plot(train_f1_log, history["f1"], "F1", len(tr["f1"]))
+            _plot(tr["auc"], [val["auc"]] * len(tr["auc"]), "AUC", len(tr["auc"]))
 
         elapsed = time.time() - t0
         print(f"  time {elapsed/60:.1f} min  |  "

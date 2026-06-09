@@ -6,25 +6,22 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
-#SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
+#SBATCH --partition=rocky
+#SBATCH --gres=gpu:v100:1
 
-CONDA_ENV=omixai
+module load Python/Google_Colab_GPU_2024
+
+PYTHON=/opt/software/python/envs/google_colab_gpu_2024/bin/python3
 PROJECT_DIR=$HOME/OmiXAI
 WEIGHTS=$HOME/weights/graphmzc.pt
-DATA_DIR=$HOME/DNA
+DATA_DIR=$HOME/DNA/z_dna
 
-conda activate $CONDA_ENV
-
-# SparseVector lives inside the DNA folder
-export PYTHONPATH=$HOME/DNA/Sparse_vector:$PYTHONPATH
+export PYTHONPATH=$HOME/DNA:$PYTHONPATH
 
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results
-
 cd $PROJECT_DIR
 
-python scripts/run_omixai_gnn.py \
+$PYTHON scripts/run_omixai_gnn.py \
     --model    $WEIGHTS \
     --data_dir $DATA_DIR \
     --width    100 \
