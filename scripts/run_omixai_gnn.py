@@ -140,8 +140,22 @@ def main(args):
                        test_dataset.intervals,
                        feature_names)
 
-    loader_params = dict(batch_size=1, num_workers=4, shuffle=False)
-    loader_train  = DataLoader(train_dataset, **loader_params)
+    # Filter train dataset to positive intervals only (intervals containing Z-DNA).
+    # Interpretation only makes sense for True Positives, and iterating over
+    # negative intervals wastes GPU time with no useful TP signal.
+    pos_intervals = [iv for iv in train_dataset.intervals
+                     if ZDNA[iv[0]][int(iv[1]):int(iv[2])].any()]
+    print(f"Train intervals: {len(train_dataset.intervals)} total, "
+          f"{len(pos_intervals)} positive (used for interpretation)")
+
+    from omixai.data import GraphGenomicDataset
+    interp_dataset = GraphGenomicDataset(
+        CHROMS, feature_names, DNA, DNA_features, ZDNA,
+        pos_intervals, args.width
+    )
+
+    loader_params  = dict(batch_size=1, num_workers=4, shuffle=False)
+    loader_interp  = DataLoader(interp_dataset, **loader_params)
 
     # -- model --
     model = GraphMZC(n_features=n_features)
@@ -153,9 +167,9 @@ def main(args):
     model = model.to(device).eval()
     print(f"Model loaded: {args.model}")
 
-    # -- OmiXAI: train TPs only --
-    pipeline = OmiXAI(model=model, n_features=n_features, device=device)
-    scores   = pipeline.interpret(loader_train, width=args.width)
+    # -- OmiXAI: positive train intervals only --
+    pipeline = OmiXAI(model=model, n_features=n_features, model_type='gnn', device=device)
+    scores   = pipeline.interpret(loader_interp, width=args.width)
 
     np.save(out / "omixai_gnn_scores.npy", scores)
 
