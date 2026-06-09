@@ -11,13 +11,12 @@
 #SBATCH --gres=gpu:v100:1
 #SBATCH --array=0-5
 
-# K_VALUES must match retrain_topk.py: [50, 100, 300, 500, 704, 1946]
 K_VALUES=(50 100 300 500 704 1946)
 K=${K_VALUES[$SLURM_ARRAY_TASK_ID]}
 
 CONDA_ENV=omixai
 PROJECT_DIR=$HOME/OmiXAI
-DATA_DIR=$HOME/DNA/z_dna   # must match omixai.slurm (contains hg38_dna/zdna/features)
+DATA_DIR=$HOME/DNA
 
 conda activate $CONDA_ENV
 export PYTHONPATH=$HOME/DNA/Sparse_vector:$PYTHONPATH
