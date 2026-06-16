@@ -9,20 +9,20 @@
 #SBATCH --partition=rocky
 #SBATCH --gres=gpu:v100:1
 
-module load Python/Google_Colab_GPU_2024
-
-PYTHON=/opt/software/python/envs/google_colab_gpu_2024/bin/python3
 PROJECT_DIR=$HOME/OmiXAI
-WEIGHTS=$HOME/weights/graphmzc.pt
+WEIGHTS=$HOME/OmiXAI/weights/Cousine_GraphZSAGEConv_v5_lin_F1=77.75_epoch=17.pt
 DATA_DIR=$HOME/DNA/z_dna
 
-export PYTHONPATH=$HOME/DNA:$PYTHONPATH
+module load Python/Google_Colab_GPU_2024
+PYTHON=/opt/software/python/envs/google_colab_gpu_2024/bin/python3
+export PYTHONPATH=$HOME/DNA:$HOME/DNA/Sparse_vector:$PYTHONPATH
+export OMIXAI_FEATURE_ORDER=$HOME/OmiXAI/feature_order.csv
 
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results
 cd $PROJECT_DIR
 
 $PYTHON scripts/run_omixai_gnn.py \
-    --model    $WEIGHTS \
-    --data_dir $DATA_DIR \
+    --model    "$WEIGHTS" \
+    --data_dir "$DATA_DIR" \
     --width    100 \
     --out_dir  results/

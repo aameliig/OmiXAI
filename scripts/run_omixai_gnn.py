@@ -35,6 +35,7 @@ from torch_geometric.loader import DataLoader
 from tqdm import tqdm
 
 from omixai import OmiXAI, GraphMZC, get_train_test_split_graph
+from genome_cache import load_genome_cached
 
 CHROMS = [f"chr{i}" for i in list(range(1, 23)) + ["X", "Y", "M"]]
 
@@ -49,28 +50,11 @@ def load_chromosome(chrom: str, dna_dir: str) -> str:
 
 
 def load_all_data(data_dir: str):
-    dna_dir      = os.path.join(data_dir, "hg38_dna")
-    zdna_path    = os.path.join(data_dir, "hg38_zdna", "sparse", "ZDNA_cousine.pkl")
-    features_dir = os.path.join(data_dir, "hg38_features", "sparse")
-
-    print("Loading DNA sequences...")
-    DNA = {chrom: load_chromosome(chrom, dna_dir) for chrom in tqdm(CHROMS)}
-
-    print("Loading Z-DNA labels...")
-    ZDNA = load(zdna_path)
-
-    print("Loading omics features...")
-    # IMPORTANT: keep the raw os.listdir order. The trained weights were produced
-    # with features in this exact (unsorted) order — see the original notebooks,
-    # which used `[i[:-4] for i in os.listdir(...)]` with no sorting. Sorting here
-    # would permute the model's input columns relative to the weights and silently
-    # corrupt every attribution. The canonical order is persisted to
-    # feature_names.json (see main) so all downstream scripts align to it.
-    feature_names = [f[:-4] for f in os.listdir(features_dir) if f.endswith(".pkl")]
-    DNA_features  = {feat: load(os.path.join(features_dir, f"{feat}.pkl"))
-                     for feat in tqdm(feature_names)}
-
-    return DNA, ZDNA, DNA_features, feature_names
+    # Delegates to the shared one-file genome cache (DNA + ZDNA + omics features).
+    # First run builds ~/omixai_cache/genome.joblib; later runs read it in seconds.
+    # Feature order is the raw os.listdir order (matches the trained weights) and
+    # is frozen in the cache, so every script shares the exact same ordering.
+    return load_genome_cached(data_dir)
 
 
 # ------------------------------------------------------------------

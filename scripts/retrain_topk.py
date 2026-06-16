@@ -39,27 +39,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from omixai import GraphMZC, get_train_test_split_graph
 from omixai.training import train_gnn, evaluate_gnn
+from genome_cache import load_genome_cached
 
 CHROMS = [f"chr{i}" for i in list(range(1, 23)) + ["X", "Y", "M"]]
 K_VALUES = [50, 100, 300, 500, 704, 1946]   # mirrors paper tables
 
 
 def load_data(data_dir: str):
-    dna_dir      = os.path.join(data_dir, "hg38_dna")
-    zdna_path    = os.path.join(data_dir, "hg38_zdna", "sparse", "ZDNA_cousine.pkl")
-    features_dir = os.path.join(data_dir, "hg38_features", "sparse")
-
-    DNA   = {}
-    files = sorted(os.listdir(dna_dir))
-    for chrom in tqdm(CHROMS, desc="DNA"):
-        chrom_files = sorted(f for f in files if f"{chrom}_" in f)
-        DNA[chrom]  = "".join(load(os.path.join(dna_dir, f)) for f in chrom_files)
-
-    ZDNA         = load(zdna_path)
-    feature_names = [f[:-4] for f in os.listdir(features_dir) if f.endswith(".pkl")]
-    DNA_features  = {feat: load(os.path.join(features_dir, f"{feat}.pkl"))
-                     for feat in tqdm(feature_names, desc="omics")}
-    return DNA, ZDNA, DNA_features, feature_names
+    # Shared one-file genome cache: the 6 retrain array tasks now read one
+    # ~/omixai_cache/genome.joblib instead of re-reading ~2000 pkls each.
+    return load_genome_cached(data_dir)
 
 
 def train_and_eval(feature_subset: list[str], DNA, ZDNA, DNA_features,
