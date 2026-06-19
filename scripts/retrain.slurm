@@ -15,7 +15,7 @@ DATA_DIR=$HOME/DNA/z_dna
 
 module load Python/Google_Colab_GPU_2024
 PYTHON=/opt/software/python/envs/google_colab_gpu_2024/bin/python3
-export PYTHONPATH=$HOME/DNA:$HOME/DNA/Sparse_vector:$PYTHONPATH
+export PYTHONPATH=$PROJECT_DIR:$HOME/DNA:$HOME/DNA/Sparse_vector:$PYTHONPATH
 export OMIXAI_FEATURE_ORDER=$HOME/OmiXAI/feature_order.csv
 
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results

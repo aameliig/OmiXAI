@@ -22,11 +22,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 from torch_geometric.loader import DataLoader
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # project root on path
 
 from omixai import OmiXAI, GraphMZC, get_train_test_split_graph
 from omixai.data import GraphGenomicDataset, load_genome_cached, CHROMS

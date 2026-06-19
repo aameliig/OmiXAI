@@ -15,9 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # project root on path
 
 from omixai.data import load_genome_cached, CHROMS
 from omixai.training import retrain_topk
