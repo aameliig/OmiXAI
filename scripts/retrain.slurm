@@ -6,7 +6,6 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
 #SBATCH --partition=rocky
 #SBATCH --gres=gpu:v100:1
 
