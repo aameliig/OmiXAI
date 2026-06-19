@@ -105,13 +105,19 @@ METHOD=pfi sbatch scripts/omixai.slurm
 #   python scripts/run_interpret.py --model "$WEIGHTS" --data_dir "$DATA_DIR" \
 #       --method pfi --out_dir results/pfi_dl/
 
-# Step 3 — retrain with top-k features (~6–8 h, 1 GPU).
-# Run after the matching interpretation finishes.
+# Step 3 — retrain with top-k features. Run after the matching interpretation.
+# --k takes one value or a comma list ("all" = full feature set).
 python scripts/run_retrain.py --data_dir "$DATA_DIR" \
-    --ranking results/omixai_ranking.csv          # OmiXAI arm
+    --ranking results/omixai_ranking.csv \
+    --k 50,100,300,500,700,all                    # OmiXAI arm (sequential)
 python scripts/run_retrain.py --data_dir "$DATA_DIR" \
     --pfi_scores results/pfi_dl/pfi_dl_scores.npy \
-    --feature_names results/feature_names.json    # PFI arm
+    --feature_names results/feature_names.json --k 50,100,300,500,700,all   # PFI arm
+
+# Parallel across k (one process per GPU) — needs a multi-GPU allocation:
+#   #SBATCH --gres=gpu:v100:2
+# python scripts/run_retrain.py --data_dir "$DATA_DIR" \
+#     --ranking results/omixai_ranking.csv --k 50,100,300,500,700,all --parallel
 ```
 
 Results are written to `results/`:

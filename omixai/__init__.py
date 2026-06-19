@@ -7,7 +7,10 @@ from .data import (
     get_train_test_split_graph,
     stratified_split_intervals,
 )
-from .training import train_cnn, evaluate_cnn, train_gnn, evaluate_gnn, retrain_topk
+from .training import (
+    train_cnn, evaluate_cnn, train_gnn, evaluate_gnn,
+    retrain_topk, retrain_topk_parallel,
+)
 
 __all__ = [
     "OmiXAI",
@@ -24,4 +27,5 @@ __all__ = [
     "train_gnn",
     "evaluate_gnn",
     "retrain_topk",
+    "retrain_topk_parallel",
 ]

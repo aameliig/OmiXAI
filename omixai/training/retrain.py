@@ -17,6 +17,7 @@ dim is k + 4 DNA channels.
 from __future__ import annotations
 
 import time
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -119,6 +120,13 @@ def _train_and_eval(subset, dna, features, labels, train_iv, test_iv,
     return best
 
 
+def _normalize_k(k):
+    """Accept a single k (int or None) or an iterable of them; return a list."""
+    if k is None or isinstance(k, int):
+        return [k]
+    return list(k)
+
+
 def retrain_topk(
     ranked_features,
     chroms,
@@ -126,7 +134,8 @@ def retrain_topk(
     features,
     labels,
     *,
-    k_list=(50, 100, 300, 500, 700, None),
+    k=(50, 100, 300, 500, 700, None),
+    k_list=None,                       # deprecated alias for `k`
     width: int = 100,
     n_epochs: int = 10,
     neg_ratio: int = 2,
@@ -136,7 +145,7 @@ def retrain_topk(
     device=None,
 ):
     """
-    Retrain GraphMZC on top-k features for each k in ``k_list``.
+    Retrain GraphMZC on top-k features for each requested k.
 
     Parameters
     ----------
@@ -146,7 +155,7 @@ def retrain_topk(
     dna             : {seq_id -> str}
     features        : {feature_name -> {seq_id -> array}}
     labels          : {seq_id -> array of 0/1}
-    k_list          : numbers of omics features to keep; ``None`` means "all".
+    k               : a single int (or None = "all"), or a list of them.
 
     Returns
     -------
@@ -154,18 +163,19 @@ def retrain_topk(
     """
     import pandas as pd
 
+    ks = _normalize_k(k_list if k_list is not None else k)
     device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
     train_iv, test_iv = stratified_split_intervals(
         width, chroms, labels, neg_ratio=neg_ratio, test_size=0.2, seed=seed
     )
-    print(f"split: train={len(train_iv)} test={len(test_iv)}")
+    print(f"[{device}] split: train={len(train_iv)} test={len(test_iv)}")
 
     rows = []
-    for k in k_list:
-        order = ranked_features if k is None else ranked_features[:k]
+    for kv in ks:
+        order = ranked_features if kv is None else ranked_features[:kv]
         subset = [f for f in order if f in features]
         kk = len(subset)
-        print(f"\n=== {method_name} k={k} ({kk} omics + 4 DNA) ===", flush=True)
+        print(f"\n=== {method_name} k={kv} ({kk} omics + 4 DNA) ===", flush=True)
         b = _train_and_eval(subset, dna, features, labels, train_iv, test_iv,
                             width, n_epochs, num_workers, device)
         rows.append({"k": kk, "method": method_name, "best_epoch": b["epoch"],
@@ -173,3 +183,79 @@ def retrain_topk(
         print(f"  BEST: F1={b['f1']:.4f} AUC={b['auc']:.4f} @epoch {b['epoch']}")
 
     return pd.DataFrame(rows)
+
+
+# --------------------------------------------------------------- parallel by k
+
+def _retrain_worker(rank, devices, data_dir, ranked_features, chroms, k_splits,
+                    width, n_epochs, neg_ratio, num_workers, seed, method_name, ret_dir):
+    import torch
+    from ..data import load_genome_cached
+    dev = torch.device(devices[rank])
+    dna, zdna, dna_features, _ = load_genome_cached(data_dir)
+    df = retrain_topk(ranked_features, chroms, dna, dna_features, zdna,
+                      k=k_splits[rank], width=width, n_epochs=n_epochs,
+                      neg_ratio=neg_ratio, num_workers=num_workers, seed=seed,
+                      method_name=method_name, device=dev)
+    df.to_csv(Path(ret_dir) / f"retrain_rank_{rank}.csv", index=False)
+
+
+def retrain_topk_parallel(
+    data_dir,
+    ranked_features,
+    chroms,
+    *,
+    k=(50, 100, 300, 500, 700, None),
+    devices=None,
+    width: int = 100,
+    n_epochs: int = 10,
+    neg_ratio: int = 2,
+    num_workers: int = 4,
+    seed: int = 42,
+    method_name: str = "OmiXAI",
+):
+    """
+    Retrain across several k IN PARALLEL, one process per CUDA device.
+
+    Pure Python (no SLURM): k values are round-robined across ``devices`` and
+    each subprocess reloads the genome from the joblib cache, so nothing huge is
+    pickled. Real speedup needs more than one visible GPU (request
+    ``--gres=gpu:v100:N``); with a single device it transparently falls back to
+    the sequential ``retrain_topk`` reload path.
+
+    Returns a single concatenated DataFrame, sorted by k.
+    """
+    import pandas as pd
+
+    if devices is None:
+        n = torch.cuda.device_count() if torch.cuda.is_available() else 0
+        devices = [f"cuda:{i}" for i in range(n)] if n > 1 else (
+            ["cuda:0"] if n == 1 else ["cpu"])
+
+    ks = _normalize_k(k)
+
+    # single device → no benefit from subprocesses; load once and run inline.
+    if len(devices) == 1:
+        from ..data import load_genome_cached
+        dna, zdna, dna_features, _ = load_genome_cached(data_dir)
+        return retrain_topk(ranked_features, chroms, dna, dna_features, zdna,
+                            k=ks, width=width, n_epochs=n_epochs,
+                            neg_ratio=neg_ratio, num_workers=num_workers,
+                            seed=seed, method_name=method_name,
+                            device=torch.device(devices[0]))
+
+    import tempfile
+    import torch.multiprocessing as mp
+    splits = [ks[i::len(devices)] for i in range(len(devices))]
+    splits = [s for s in splits if s]                      # drop empty shards
+    devices = devices[:len(splits)]
+    with tempfile.TemporaryDirectory() as ret:
+        mp.spawn(
+            _retrain_worker,
+            args=(list(devices), data_dir, ranked_features, chroms, splits,
+                  width, n_epochs, neg_ratio, num_workers, seed, method_name, ret),
+            nprocs=len(devices), join=True,
+        )
+        dfs = [pd.read_csv(Path(ret) / f"retrain_rank_{r}.csv")
+               for r in range(len(devices))]
+    return pd.concat(dfs, ignore_index=True).sort_values("k").reset_index(drop=True)
