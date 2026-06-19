@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omixai"
+version = "0.1.0"
+description = "Ensemble XAI pipeline for interpretable deep learning on (multi-)omics data"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "CC-BY-4.0" }
+authors = [
+    { name = "Ameliia Alaeva" },
+    { name = "Anna Lapteva" },
+    { name = "Natalya Mikhaylovskaya" },
+    { name = "Vladislav Malkov" },
+    { name = "Alan Herbert" },
+    { name = "Andrey Borevskiy" },
+    { name = "Maria Poptsova", email = "mpoptsova@hse.ru" },
+]
+keywords = ["XAI", "deep learning", "omics", "genomics", "feature attribution",
+            "graph neural networks", "captum", "pytorch-geometric"]
+
+# Pure-PyPI dependencies — `pip install -e .` works on CPU/macOS/Linux out of the
+# box. torch-scatter/torch-sparse/torch-cluster are NOT required: modern PyG
+# (>=2.3) provides native fallbacks for the layers we use (SAGEConv etc.).
+dependencies = [
+    "torch>=2.1",
+    "torch-geometric>=2.3",
+    "captum>=0.6",
+    "numpy>=1.23",
+    "pandas>=1.5",
+    "scikit-learn>=1.1",
+    "scipy>=1.9",
+    "joblib>=1.2",
+    "tqdm>=4.64",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.6", "seaborn>=0.12"]
+# Exact GPU reproduction of the paper (CUDA 12.1). The wheels live on dedicated
+# indexes, so install with:
+#   pip install "omixai[gpu]" \
+#     --extra-index-url https://download.pytorch.org/whl/cu121 \
+#     -f https://data.pyg.org/whl/torch-2.1.2+cu121.html
+gpu = [
+    "torch==2.1.2",
+    "torch-scatter",
+    "torch-sparse",
+    "torch-cluster",
+]
+
+[project.urls]
+Homepage = "https://github.com/aameliig/OmiXAI"
+Preprint = "https://www.biorxiv.org/content/10.1101/2025.04.28.651097v1"
+
+[tool.setuptools.packages.find]
+include = ["omixai*"]

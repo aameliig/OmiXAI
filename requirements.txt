@@ -1,29 +1,27 @@
-# PyTorch Geometric wheels — URL MUST match the torch + CUDA version.
-# HSE cluster (module load Python/Google_Colab_GPU_2024): torch 2.1.2 + CUDA 12.1.
-# Pinning a different torch/CUDA here causes torch-scatter/torch-sparse
-# "undefined symbol" ABI errors at import — keep these in lockstep with the module.
---find-links https://data.pyg.org/whl/torch-2.1.2+cu121.html
-torch-scatter
-torch-sparse
-torch-cluster
-torch-geometric
+# Runtime dependencies (pure PyPI — installs in one command on CPU/macOS/Linux):
+#     pip install -r requirements.txt
+# or, to get the package itself on PATH:
+#     pip install -e .
+#
+# torch-scatter / torch-sparse / torch-cluster are NOT needed: modern PyG
+# (>=2.3) ships native fallbacks for the layers OmiXAI uses (SAGEConv etc.).
+#
+# For an exact-CUDA GPU build (paper reproduction) see the [gpu] extra in
+# pyproject.toml, or the "exact reproduction" note in the README. On the HSE
+# cluster nothing here is needed — `module load Python/Google_Colab_GPU_2024`
+# already provides torch 2.1.2+cu121, torch_geometric and captum.
 
-# Core deep learning (provided by the cluster module; pin to match it)
-torch==2.1.2
-torchvision==0.16.2
+torch>=2.1
+torch-geometric>=2.3
+captum>=0.6
 
-# XAI attribution
-captum
+numpy>=1.23
+pandas>=1.5
+scikit-learn>=1.1
+scipy>=1.9
+joblib>=1.2
+tqdm>=4.64
 
-# Data & ML
-numpy==1.26.4
-pandas==2.2.2
-scikit-learn==1.5.2
-scipy==1.13.1
-joblib==1.4.2
-
-# Visualisation
-matplotlib==3.8.0
-seaborn==0.13.2
-
-tqdm==4.66.6
+# optional, only for plotting / notebooks
+matplotlib>=3.6
+seaborn>=0.12
