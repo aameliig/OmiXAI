@@ -2,7 +2,7 @@ import os
 
 import numpy as np
 from joblib import load
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelBinarizer
 from torch.utils import data
 from tqdm import trange
@@ -65,26 +65,37 @@ def get_train_test_split(
     dna: dict,
     dna_features: dict,
     labels: dict,
+    neg_ratio: int = 3,
+    test_size: float = 0.2,
+    seed: int = 42,
 ) -> tuple[GenomicDataset, GenomicDataset]:
     """
-    Build train and test GenomicDatasets with stratified split by chromosome.
+    Build train and test GenomicDatasets with a canonical class-stratified split.
 
-    Positive intervals (containing at least one labelled nucleotide) are
-    balanced 1:3 against negative intervals sampled without replacement.
+    Positive intervals (containing at least one labelled nucleotide) are balanced
+    `neg_ratio`:1 against negatives sampled without replacement. The split is
+    stratified by (class, chromosome) via StratifiedShuffleSplit so both folds
+    keep the same class balance. This replaces the legacy `int(i < 400)` strata,
+    which (with shuffle=False) put almost all positives in one fold.
     """
+    np.random.seed(seed)
     pos, neg = [], []
     for chrom in chroms:
         for start in trange(0, labels[chrom].shape - width, width, desc=chrom):
             interval = [chrom, start, min(start + width, labels[chrom].shape)]
             (pos if labels[chrom][start : start + width].any() else neg).append(interval)
 
-    neg = np.array(neg)[
-        np.random.choice(len(neg), size=len(pos) * 3, replace=False)
-    ].tolist()
-
-    all_intervals = pos + neg
-    strata = [f"{int(i < 400)}_{iv[0]}" for i, iv in enumerate(all_intervals)]
-    train_idx, test_idx = next(StratifiedKFold().split(all_intervals, strata))
+    neg = np.array(neg, dtype=object)[
+        np.random.choice(len(neg), size=len(pos) * neg_ratio, replace=False)
+    ]
+    all_intervals = [[r[0], int(r[1]), int(r[2])]
+                     for r in (list(np.array(pos, dtype=object)) + list(neg))]
+    strata = np.array([f"{int(i < len(pos))}_{iv[0]}"
+                       for i, iv in enumerate(all_intervals)])
+    train_idx, test_idx = next(
+        StratifiedShuffleSplit(n_splits=1, test_size=test_size,
+                               random_state=seed).split(all_intervals, strata)
+    )
 
     return (
         GenomicDataset(chroms, feature_names, dna, dna_features, labels,

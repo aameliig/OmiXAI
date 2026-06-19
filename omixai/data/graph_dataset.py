@@ -1,10 +1,8 @@
 import numpy as np
 import torch
-from joblib import load
-from sklearn.model_selection import StratifiedKFold
+from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.preprocessing import LabelBinarizer
 from torch_geometric.data import Data, Dataset
-from tqdm import trange
 
 
 def _linear_edge_index(width: int) -> torch.Tensor:
@@ -73,27 +71,52 @@ def get_train_test_split_graph(
     dna: dict,
     dna_features: dict,
     labels: dict,
+    neg_ratio: int = 2,
+    test_size: float = 0.2,
+    seed: int = 42,
 ) -> tuple[GraphGenomicDataset, GraphGenomicDataset]:
     """
-    Build train and test GraphGenomicDatasets with stratified split by chromosome.
+    Build train and test GraphGenomicDatasets using the canonical
+    class-stratified split (see `stratified_split_intervals`).
     """
-    pos, neg = [], []
-    for chrom in chroms:
-        for start in trange(0, labels[chrom].shape - width, width, desc=chrom):
-            interval = [chrom, start, min(start + width, labels[chrom].shape)]
-            (pos if labels[chrom][start : start + width].any() else neg).append(interval)
-
-    neg = np.array(neg)[
-        np.random.choice(len(neg), size=len(pos) * 3, replace=False)
-    ].tolist()
-
-    all_intervals = pos + neg
-    strata = [f"{int(i < 400)}_{iv[0]}" for i, iv in enumerate(all_intervals)]
-    train_idx, test_idx = next(StratifiedKFold().split(all_intervals, strata))
-
+    train_intervals, test_intervals = stratified_split_intervals(
+        width, chroms, labels, neg_ratio=neg_ratio, test_size=test_size, seed=seed
+    )
     return (
         GraphGenomicDataset(chroms, feature_names, dna, dna_features, labels,
-                            [all_intervals[i] for i in train_idx], width),
+                            train_intervals, width),
         GraphGenomicDataset(chroms, feature_names, dna, dna_features, labels,
-                            [all_intervals[i] for i in test_idx], width),
+                            test_intervals, width),
     )
+
+
+def stratified_split_intervals(width, chroms, labels, neg_ratio=2,
+                               test_size=0.2, seed=42):
+    """
+    Canonical class-stratified train/test split over fixed-width intervals.
+
+    Positives = intervals containing >=1 labelled nucleotide; negatives are
+    sampled at `neg_ratio` x positives. The split is stratified by
+    (class, chromosome) via StratifiedShuffleSplit, so both folds keep the same
+    class balance. This replaces the legacy `int(i < 400)` strata, which (with
+    shuffle=False) sent ~all positives to the test fold.
+
+    Returns
+    -------
+    (train_intervals, test_intervals) : two lists of [chrom, begin, end]
+    """
+    np.random.seed(seed)
+    pos, neg = [], []
+    for c in chroms:
+        n = labels[c].shape
+        for st in range(0, n - width, width):
+            iv = [c, st, min(st + width, n)]
+            (pos if labels[c][st:st + width].any() else neg).append(iv)
+    pos = np.array(pos, dtype=object)
+    neg = np.array(neg, dtype=object)
+    neg = neg[np.random.choice(len(neg), size=len(pos) * neg_ratio, replace=False)]
+    equalized = [[r[0], int(r[1]), int(r[2])] for r in np.concatenate([pos, neg])]
+    strat = np.array([f"{int(i < len(pos))}_{iv[0]}" for i, iv in enumerate(equalized)])
+    tr, te = next(StratifiedShuffleSplit(n_splits=1, test_size=test_size,
+                                         random_state=seed).split(equalized, strat))
+    return [equalized[i] for i in tr], [equalized[i] for i in te]

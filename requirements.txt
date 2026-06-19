@@ -1,15 +1,16 @@
-# PyTorch Geometric wheels — URL must match torch + CUDA version.
-# HSE cluster (module Python/Google_Colab_GPU_2024): torch 2.5.1 + CUDA 12.4
---find-links https://data.pyg.org/whl/torch-2.5.1+cu124.html
+# PyTorch Geometric wheels — URL MUST match the torch + CUDA version.
+# HSE cluster (module load Python/Google_Colab_GPU_2024): torch 2.1.2 + CUDA 12.1.
+# Pinning a different torch/CUDA here causes torch-scatter/torch-sparse
+# "undefined symbol" ABI errors at import — keep these in lockstep with the module.
+--find-links https://data.pyg.org/whl/torch-2.1.2+cu121.html
 torch-scatter
 torch-sparse
 torch-cluster
 torch-geometric
 
-# Core deep learning
-# HSE cluster: torch 2.5.1 available via module load Python/Google_Colab_GPU_2024
-torch==2.5.1
-torchvision==0.20.1
+# Core deep learning (provided by the cluster module; pin to match it)
+torch==2.1.2
+torchvision==0.16.2
 
 # XAI attribution
 captum

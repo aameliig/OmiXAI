@@ -2,9 +2,20 @@
 OmiXAI — ensemble XAI pipeline for CNN and GNN models trained on genomic features.
 
 Workflow:
-    1. OmiXAI(model, n_features)          # model_type auto-detected
-    2. .interpret(*loaders, methods, width)
-    3. .rank_features(feature_names)
+    1. OmiXAI(model)                                   # model_type auto-detected
+    2. .interpret(*loaders, method="hybrid"|"pfi")     # dims inferred from data
+    3. .rank_features(feature_names)                   # skip inferred from names
+
+Notes
+-----
+* No feature counts are passed in: the input width is read from the data, and
+  the number of leading channels to skip (e.g. 4 one-hot DNA channels) is
+  derived as ``F - len(feature_names)`` at ranking time.
+* ``method="hybrid"`` runs the gradient/explainer ensemble + rank aggregation.
+  ``method="pfi"`` runs permutation feature importance (GNN only).
+* Parallelism is pure Python: hybrid interpretation overlaps CPU batch
+  preparation via the DataLoader's ``num_workers``; PFI splits features across
+  multiple CUDA devices when available (see ``omixai.xai.permutation_importance``).
 """
 
 from __future__ import annotations
@@ -16,6 +27,7 @@ import torch.nn as nn
 from tqdm import tqdm
 
 from captum.attr import Deconvolution, GuidedBackprop, InputXGradient, IntegratedGradients
+from torch_geometric.data import Data
 from torch_geometric.nn import MessagePassing
 from torch_geometric.explain import CaptumExplainer, Explainer, GNNExplainer
 
@@ -29,9 +41,8 @@ def detect_model_type(model: nn.Module) -> str:
     """
     Infer whether a model is CNN or GNN by inspecting its layer types.
 
-    Any module that subclasses torch_geometric.nn.MessagePassing is treated
-    as a GNN layer. nn.Conv2d presence indicates a CNN.
-    Falls back to ValueError if neither is found.
+    Any module subclassing torch_geometric.nn.MessagePassing is treated as a GNN
+    layer; nn.Conv2d presence indicates a CNN.
     """
     for module in model.modules():
         if isinstance(module, MessagePassing):
@@ -45,76 +56,79 @@ def detect_model_type(model: nn.Module) -> str:
     )
 
 
+def _linear_edges(n: int) -> torch.Tensor:
+    src, dst = [], []
+    for i in range(n - 1):
+        src += [i, i + 1]
+        dst += [i + 1, i]
+    return torch.tensor([src, dst], dtype=torch.long)
+
+
 class OmiXAI:
     """
     Ensemble XAI pipeline for CNN and GNN models.
 
     Parameters
     ----------
-    model           : trained PyTorch model
-    n_features      : number of features to attribute (after any skip channels)
-    model_type      : 'cnn' or 'gnn'; auto-detected if omitted
-    n_skip_features : leading feature channels to ignore during attribution
-                      (e.g. 4 for one-hot DNA encoding A/T/G/C).
-                      Set to 0 if your input contains only the features you
-                      want to rank — no skipping will be applied.
-    device          : defaults to CUDA if available
+    model      : trained PyTorch model (already trained — passed in as-is)
+    model_type : 'cnn' or 'gnn'; auto-detected if omitted
+    device     : defaults to CUDA if available
     """
 
     def __init__(
         self,
         model: nn.Module,
-        n_features: int,
         model_type: str | None = None,
-        n_skip_features: int = 4,
         device: torch.device | None = None,
     ) -> None:
         self.device = device or _DEVICE
         self.model  = model.to(self.device).eval()
         self.model_type = model_type or detect_model_type(model)
-
         if self.model_type not in ("cnn", "gnn"):
             raise ValueError("model_type must be 'cnn' or 'gnn'")
+        self._scores: dict[str, np.ndarray] = {}   # method → full-width vector (len F)
 
-        self.n_features      = n_features
-        self.n_skip_features = n_skip_features
-        self._scores: dict[str, np.ndarray] = {}
-
-    # ------------------------------------------------------------------
-    # Public API
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ API
 
     def interpret(
         self,
         *loaders,
+        method: str = "hybrid",
         methods: list[str] | None = None,
         width: int = 100,
         n_steps_ig: int = 50,
+        pfi_n_repeats: int = 1,
+        pfi_batch_size: int = 64,
+        pfi_num_workers: int = 0,
+        pfi_devices=None,
     ) -> dict[str, np.ndarray]:
         """
-        Compute mean attribution vectors over True Positive predictions.
+        Compute feature scores. Stored vectors are full input width (length F);
+        skipping of leading channels happens later in ``rank_features``.
 
-        Pass both train and test loaders to cover all True Positives:
-            pipeline.interpret(train_loader, test_loader, width=100)
+        method="hybrid"
+            Mean attribution over True-Positive predictions for each ensemble
+            method. Pass several loaders to cover all TPs:
+            ``interpret(train_loader, test_loader)`` or ``interpret(train_loader)``.
+            DataLoader ``num_workers`` controls CPU-side parallelism.
 
-        For train-only interpretation (cleaner for feature selection):
-            pipeline.interpret(train_loader, width=100)
-
-        Parameters
-        ----------
-        *loaders    : DataLoader(s) — (x, y) tuples for CNN or PyG Data for GNN
-        methods     : attribution methods to run; defaults to all for model type
-        width       : sequence window length in nucleotides (or time steps)
-        n_steps_ig  : integration steps for Integrated Gradients (default 50)
-
-        Returns
-        -------
-        dict  method_name → mean attribution array of shape (n_features,)
+        method="pfi"  (GNN only)
+            Permutation feature importance: F1 drop when each feature is
+            permuted. Parallelises across CUDA devices when more than one is
+            visible (pure Python, no SLURM).
         """
+        if method == "pfi":
+            return self._interpret_pfi(
+                *loaders, width=width, n_repeats=pfi_n_repeats,
+                batch_size=pfi_batch_size, num_workers=pfi_num_workers,
+                devices=pfi_devices,
+            )
+        if method != "hybrid":
+            raise ValueError("method must be 'hybrid' or 'pfi'")
+
         available = CNN_METHODS if self.model_type == "cnn" else GNN_METHODS
         methods   = list(methods or available)
-
-        unknown = [m for m in methods if m not in available]
+        unknown   = [m for m in methods if m not in available]
         if unknown:
             raise ValueError(
                 f"Methods {unknown} not available for '{self.model_type}'. "
@@ -122,18 +136,19 @@ class OmiXAI:
             )
 
         for name in methods:
-            total = np.zeros(self.n_features, dtype=np.float64)
-            count = 0
+            total, count, dim = None, 0, None
             for loader in loaders:
                 t, c = (
                     self._run_cnn(loader, name, width, n_steps_ig)
                     if self.model_type == "cnn"
                     else self._run_gnn(loader, name, width)
                 )
+                if total is None:
+                    total, dim = np.zeros_like(t), t.shape[0]
                 total += t
                 count += c
             self._scores[name] = total / max(count, 1)
-            print(f"{name}: averaged over {count} TP regions")
+            print(f"{name}: averaged over {count} TP regions ({dim} channels)")
 
         return self._scores
 
@@ -143,23 +158,30 @@ class OmiXAI:
         scores: dict[str, np.ndarray] | None = None,
     ) -> pd.DataFrame:
         """
-        Apply hybrid ranking to stored (or provided) attribution scores.
+        Hybrid ranking of stored (or provided) scores.
 
-        Each method's scores are converted to percentage deviations from the
-        method mean, then averaged across methods. Features are sorted in
-        descending order (higher = more important).
+        Each method's scores are turned into percentage deviations from that
+        method's mean, then averaged across methods; features are sorted
+        descending (higher = more important).
 
-        Returns
-        -------
-        DataFrame with column 'mean_deviation', indexed by feature name.
+        The number of leading channels to drop (DNA one-hot etc.) is inferred:
+        ``skip = F - len(feature_names)``. If ``feature_names`` is None, all
+        channels are ranked with positional names.
         """
         src = scores or self._scores
         if not src:
-            raise RuntimeError("No attribution scores — run interpret() first.")
+            raise RuntimeError("No scores — run interpret() first.")
 
-        df = pd.DataFrame(src)
+        df = pd.DataFrame(src)                       # rows = full width F
         if feature_names is not None:
-            df.index = feature_names[: len(df)]
+            skip = len(df) - len(feature_names)
+            if skip < 0:
+                raise ValueError(
+                    f"feature_names ({len(feature_names)}) longer than scored "
+                    f"channels ({len(df)})."
+                )
+            df = df.iloc[skip:].reset_index(drop=True)
+            df.index = feature_names
 
         pct = pd.DataFrame(index=df.index)
         for col in df.columns:
@@ -169,75 +191,78 @@ class OmiXAI:
         pct["mean_deviation"] = pct.mean(axis=1)
         return pct[["mean_deviation"]].sort_values("mean_deviation", ascending=False)
 
-    # ------------------------------------------------------------------
-    # CNN
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------------ PFI
 
-    def _run_cnn(
-        self, loader, method: str, width: int, n_steps_ig: int
-    ) -> tuple[np.ndarray, int]:
+    def _interpret_pfi(self, *loaders, width, n_repeats, batch_size,
+                       num_workers, devices):
+        if self.model_type != "gnn":
+            raise ValueError("method='pfi' is implemented for GNN models only.")
+        from .xai import permutation_importance
+
+        data_list = []
+        for loader in loaders:
+            for dt in loader:
+                x = dt.x.squeeze(0)                  # (N, F)
+                y = dt.y.squeeze(0)                  # (N,)
+                data_list.append(
+                    Data(x=x, edge_index=_linear_edges(x.shape[0]), y=y)
+                )
+        # n_skip=0 → full-width vector (DNA channels included), kept consistent
+        # with hybrid storage; rank_features slices the leading channels off.
+        imp = permutation_importance(
+            self.model, data_list, n_skip=0, n_repeats=n_repeats,
+            batch_size=batch_size, num_workers=num_workers, devices=devices,
+        )
+        self._scores = {"PFI": imp}
+        print(f"PFI: {len(imp)} channels over {len(data_list)} intervals")
+        return self._scores
+
+    # ------------------------------------------------------------------ CNN
+
+    def _run_cnn(self, loader, method, width, n_steps_ig):
         explainer = self._build_captum(method)
-        total = np.zeros(self.n_features, dtype=np.float64)
-        count = 0
-
+        total, count = None, 0
         for x, y_true in tqdm(loader, desc=f"CNN/{method}", leave=False):
             x      = x.to(self.device)
             y_true = y_true.to(self.device).long()
-
             with torch.no_grad():
-                out  = self.model(x)
-                pred = torch.argmax(out, dim=1).reshape(1, width)
-
+                pred = torch.argmax(self.model(x), dim=1).reshape(1, width)
             tp = [i for i in range(width) if pred[0][i] == y_true[0][i] == 1]
             if not tp:
                 continue
+            attrs = torch.squeeze(self._captum_attr(explainer, x, method, n_steps_ig), dim=0)
+            tp_mean = attrs[tp, :].mean(dim=0)       # full width
+            total = np.zeros_like(tp_mean.cpu().numpy()) if total is None else total
+            total += tp_mean.cpu().detach().numpy()
+            count += 1
+        return (total if total is not None else np.zeros(1)), count
 
-            attrs   = self._captum_attr(explainer, x, method, n_steps_ig)
-            attrs   = torch.squeeze(attrs, dim=0)
-            tp_mean = attrs[tp, self.n_skip_features:].mean(dim=0)
-            total  += tp_mean.cpu().detach().numpy()
-            count  += 1
+    # ------------------------------------------------------------------ GNN
 
-        return total, count
-
-    # ------------------------------------------------------------------
-    # GNN
-    # ------------------------------------------------------------------
-
-    def _run_gnn(self, loader, method: str, width: int) -> tuple[np.ndarray, int]:
+    def _run_gnn(self, loader, method, width):
         explainer_obj = self._build_gnn_explainer(method)
-        total = np.zeros(self.n_features, dtype=np.float64)
-        count = 0
-
+        total, count = None, 0
         for dt in tqdm(loader, desc=f"GNN/{method}", leave=False):
             x    = dt.x.to(self.device)
             edge = dt.edge_index.to(self.device)
             y    = dt.y.to(self.device).long()
-
             valid = (edge < width).all(dim=0)
             edge  = edge[:, valid]
-
             with torch.no_grad():
-                out  = self.model(x, edge.squeeze())
-                pred = torch.argmax(out, dim=-1)
-
+                pred = torch.argmax(self.model(x, edge.squeeze()), dim=-1)
             tp = [i for i in range(width) if pred[0][i] == y[0][i] == 1]
             if not tp:
                 continue
+            mask = explainer_obj(x.squeeze(), edge).node_mask
+            tp_mean = mask[tp, :].mean(dim=0)        # full width
+            total = np.zeros_like(tp_mean.cpu().numpy()) if total is None else total
+            total += tp_mean.cpu().detach().numpy()
+            count += 1
+        return (total if total is not None else np.zeros(1)), count
 
-            explanation = explainer_obj(x.squeeze(), edge)
-            mask    = explanation.node_mask
-            tp_mean = mask[tp, self.n_skip_features:].mean(dim=0)
-            total  += tp_mean.cpu().detach().numpy()
-            count  += 1
+    # ------------------------------------------------------------------ builders
 
-        return total, count
-
-    # ------------------------------------------------------------------
-    # Builders
-    # ------------------------------------------------------------------
-
-    def _build_captum(self, method: str):
+    def _build_captum(self, method):
         return {
             "IG":     IntegratedGradients,
             "IxG":    InputXGradient,
@@ -245,7 +270,7 @@ class OmiXAI:
             "Deconv": Deconvolution,
         }[method](self.model)
 
-    def _build_gnn_explainer(self, method: str) -> Explainer:
+    def _build_gnn_explainer(self, method) -> Explainer:
         _captum_names = {
             "IG":       "IntegratedGradients",
             "IxG":      "InputXGradient",
@@ -272,9 +297,7 @@ class OmiXAI:
         )
 
     @staticmethod
-    def _captum_attr(
-        explainer, x: torch.Tensor, method: str, n_steps_ig: int
-    ) -> torch.Tensor:
+    def _captum_attr(explainer, x, method, n_steps_ig):
         if method == "IG":
             return explainer.attribute(x, target=1, n_steps=n_steps_ig)
         return explainer.attribute(x, target=1)

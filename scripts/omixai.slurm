@@ -22,8 +22,12 @@ export OMIXAI_FEATURE_ORDER=$HOME/OmiXAI/feature_order.csv
 mkdir -p $PROJECT_DIR/logs $PROJECT_DIR/results
 cd $PROJECT_DIR
 
-$PYTHON scripts/run_omixai_gnn.py \
+# METHOD=hybrid (gradient ensemble, default) or METHOD=pfi (permutation importance)
+METHOD=${METHOD:-hybrid}
+
+$PYTHON scripts/run_interpret.py \
     --model    "$WEIGHTS" \
     --data_dir "$DATA_DIR" \
+    --method   "$METHOD" \
     --width    100 \
     --out_dir  results/

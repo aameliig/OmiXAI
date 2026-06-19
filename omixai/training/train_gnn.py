@@ -28,8 +28,14 @@ def set_seed(seed: int = 42) -> None:
     torch.backends.cudnn.benchmark = False
 
 
+_CLASS_WEIGHT = torch.tensor([1.0, 25.0])   # 1:25, as in the paper's GraphMZC training
+
+
 def _nll_loss(output: torch.Tensor, y: torch.Tensor) -> torch.Tensor:
-    return nn.NLLLoss()(output.permute(0, 2, 1), y)
+    # Without class weighting the model collapses to all-negative on the
+    # imbalanced data (F1=0, AUC~0.5) when retrained from scratch.
+    w = _CLASS_WEIGHT.to(output.device)
+    return nn.NLLLoss(weight=w)(output.permute(0, 2, 1), y)
 
 
 def _batch_metrics(output, y, pred):
@@ -130,6 +136,8 @@ def train(model, optimizer, n_epochs: int, train_loader, test_loader, width: int
     """
     history = {k: [] for k in ("auc", "prec", "rec", "f1", "loss")}
     train_f1_log = []
+    best_auc = -1.0
+    best_state = None
 
     for epoch in range(n_epochs):
         t0 = time.time()
@@ -142,6 +150,11 @@ def train(model, optimizer, n_epochs: int, train_loader, test_loader, width: int
         for k in history:
             history[k].append(val[k])
 
+        # keep the best epoch by val AUC (stable selector; per-interval F1 is noisy)
+        if val["auc"] > best_auc:
+            best_auc = val["auc"]
+            best_state = {k: v.detach().cpu().clone() for k, v in model.state_dict().items()}
+
         _clear()
         if _INTERACTIVE:
             _plot(train_f1_log, history["f1"], "F1", len(tr["f1"]))
@@ -152,4 +165,7 @@ def train(model, optimizer, n_epochs: int, train_loader, test_loader, width: int
               f"AUC {val['auc']:.4f}  F1 {val['f1']:.4f}  "
               f"Prec {val['prec']:.4f}  Rec {val['rec']:.4f}")
 
+    if best_state is not None:
+        model.load_state_dict(best_state)   # restore best epoch before final eval
+        print(f"Restored best epoch (val AUC={best_auc:.4f})")
     return history

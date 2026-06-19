@@ -11,7 +11,7 @@ Preprint: [bioRxiv 2025.04.28.651097](https://doi.org/10.1101/2025.04.28.651097)
 ```mermaid
 flowchart LR
     A["Genomic Data\nDNA + omics tracks"] --> B["Preprocessing\nOmicsDC · SparseVector\none-hot encoding"]
-    B --> C["Train / Test Split\nStratifiedKFold\nby chromosome"]
+    B --> C["Train / Test Split\nStratifiedShuffleSplit\nby class + chromosome"]
 
     subgraph Training ["Model Training"]
         C --> D["ConvMZC\n12 × Conv2d\nF1=0.88 · AUC=0.97"]
@@ -91,20 +91,27 @@ pip install -r requirements.txt
 ssh -p 2222 aoborevskiy@cluster.hpc.hse.ru
 cd ~/OmiXAI
 
-# Step 1 — OmiXAI interpretation (~4–8 h, 1 GPU)
+# Step 1 — interpretation (~4–8 h, 1 GPU). Default METHOD=hybrid.
 sbatch scripts/omixai.slurm
 
 # Monitor
 squeue -u $USER
 tail -f logs/omixai_<JOBID>.out
 
-# Step 2 — RF-based PFI comparison (~30 min, CPU)
-# Run after step 1 completes (needs results/omixai_ranking.csv)
-sbatch scripts/pfi.slurm
+# Step 2 — permutation feature importance (Reviewer 1 comparison).
+# Same runner, PFI format. Parallelises across GPUs in pure Python.
+METHOD=pfi sbatch scripts/omixai.slurm
+#   or directly:
+#   python scripts/run_interpret.py --model "$WEIGHTS" --data_dir "$DATA_DIR" \
+#       --method pfi --out_dir results/pfi_dl/
 
-# Step 3 — Retrain with top-k features (~6–8 h, 1 GPU)
-# Run after step 1 completes
-sbatch scripts/retrain_topk.slurm
+# Step 3 — retrain with top-k features (~6–8 h, 1 GPU).
+# Run after the matching interpretation finishes.
+python scripts/run_retrain.py --data_dir "$DATA_DIR" \
+    --ranking results/omixai_ranking.csv          # OmiXAI arm
+python scripts/run_retrain.py --data_dir "$DATA_DIR" \
+    --pfi_scores results/pfi_dl/pfi_dl_scores.npy \
+    --feature_names results/feature_names.json    # PFI arm
 ```
 
 Results are written to `results/`:
@@ -113,9 +120,9 @@ Results are written to `results/`:
 |------|----------|
 | `omixai_ranking.csv` | Hybrid-ranked feature list |
 | `omixai_gnn_scores.npy` | Raw attribution scores per method |
-| `feature_matrix_flat.npy` | Per-interval mean features (for RF-PFI) |
-| `pfi_rf_scores.npy` | RF permutation importance scores |
-| `retrain_table.csv` | F1 / AUC at top-k for OmiXAI and PFI |
+| `feature_names.json` | Canonical feature order (shared by all scripts) |
+| `pfi_dl/pfi_dl_scores.npy` | DL permutation importance scores |
+| `retrain_omixai.csv` / `retrain_pfi.csv` | F1 / AUC at top-k per arm |
 
 ---
 
@@ -124,26 +131,24 @@ Results are written to `results/`:
 ```python
 from omixai import OmiXAI
 
-# model_type is auto-detected from layer types (Conv2d → cnn, MessagePassing → gnn)
-pipeline = OmiXAI(
-    model=graph_model,
-    n_features=1946,          # number of omics features
-    n_skip_features=4,        # leading channels to skip (4 = one-hot DNA A/T/G/C)
-)
+# Pass an already-trained model. model_type is auto-detected from layer types
+# (Conv2d → cnn, MessagePassing → gnn). No feature counts are needed: the input
+# width is read from the data, and the number of leading channels to skip is
+# inferred as F - len(feature_names) at ranking time.
+pipeline = OmiXAI(model=graph_model)
 
-# interpret train TPs only — test set stays sealed for validation
-attributions = pipeline.interpret(train_loader, width=100)
-
-# hybrid ranking
-rankings = pipeline.rank_features(feature_names=feature_list)
+# Hybrid ensemble (default). Interpret train TPs only — test set stays sealed.
+pipeline.interpret(train_loader, method="hybrid", width=100)
+rankings = pipeline.rank_features(feature_names=feature_list)   # DNA channels dropped here
 print(rankings.head(20))
+
+# Permutation feature importance (GNN), parallel across GPUs in pure Python.
+pipeline.interpret(train_loader, method="pfi", pfi_batch_size=64)
+pfi_rank = pipeline.rank_features(feature_names=feature_list)
 ```
 
-Non-genomic use (no DNA channels to skip):
-
-```python
-pipeline = OmiXAI(model=my_model, n_features=500, n_skip_features=0)
-```
+Non-genomic use: just pass `feature_names` covering every channel — then nothing
+is skipped (`skip = F - len(feature_names) = 0`).
 
 ---
 
@@ -153,26 +158,26 @@ pipeline = OmiXAI(model=my_model, n_features=500, n_skip_features=0)
 OmiXAI/
 ├── omixai/
 │   ├── __init__.py
-│   ├── pipeline.py          # OmiXAI class — interpret() and rank_features()
-│   ├── pfi.py               # permutation feature importance + ranking comparison
+│   ├── pipeline.py          # OmiXAI class — interpret(method=...) + rank_features()
 │   ├── models/
 │   │   ├── cnn.py           # ConvMZC
 │   │   └── gnn.py           # GraphMZC
 │   ├── data/
-│   │   ├── dataset.py       # GenomicDataset + stratified split (CNN)
-│   │   └── graph_dataset.py # GraphGenomicDataset + edge construction (GNN)
+│   │   ├── dataset.py       # GenomicDataset + split (CNN)
+│   │   ├── graph_dataset.py # GraphGenomicDataset + stratified_split_intervals (GNN)
+│   │   └── genome.py        # genome loading + one-file joblib cache
+│   ├── xai/
+│   │   └── pfi.py           # batched, multi-GPU permutation feature importance
 │   └── training/
 │       ├── train_cnn.py     # training loop + metrics
-│       └── train_gnn.py
-├── scripts/
-│   ├── run_omixai_gnn.py    # end-to-end runner (data loading → ranking)
-│   ├── run_pfi_rf.py        # RF-based PFI + Spearman comparison
-│   ├── retrain_topk.py      # retrain at k=50,100,300,500 + Wilcoxon test
+│       ├── train_gnn.py
+│       └── retrain.py       # retrain_topk: top-k feature-reduction experiment
+├── scripts/                 # thin runners (no logic) + SLURM wrappers
+│   ├── run_interpret.py     # interpretation runner (--method hybrid|pfi)
+│   ├── run_retrain.py       # top-k retraining runner
 │   ├── compare_old_new_ranking.py
-│   ├── correlation_matrices.py
-│   ├── omixai.slurm         # SLURM job: OmiXAI interpretation
-│   ├── pfi.slurm            # SLURM job: RF-PFI
-│   └── retrain_topk.slurm   # SLURM job: retraining experiments
+│   ├── genome_cache.py      # back-compat shim → omixai.data.genome
+│   └── omixai.slurm         # SLURM job (METHOD=hybrid|pfi)
 ├── notebooks/
 ├── results/
 ├── README.md
