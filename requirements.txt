@@ -1,0 +1,27 @@
+# Runtime dependencies (pure PyPI — installs in one command on CPU/macOS/Linux):
+#     pip install -r requirements.txt
+# or, to get the package itself on PATH:
+#     pip install -e .
+#
+# torch-scatter / torch-sparse / torch-cluster are NOT needed: modern PyG
+# (>=2.3) ships native fallbacks for the layers OmiXAI uses (SAGEConv etc.).
+#
+# For an exact-CUDA GPU build (paper reproduction) see the [gpu] extra in
+# pyproject.toml, or the "exact reproduction" note in the README. On the HSE
+# cluster nothing here is needed — `module load Python/Google_Colab_GPU_2024`
+# already provides torch 2.1.2+cu121, torch_geometric and captum.
+
+torch>=2.1
+torch-geometric>=2.3
+captum>=0.6
+
+numpy>=1.23
+pandas>=1.5
+scikit-learn>=1.1
+scipy>=1.9
+joblib>=1.2
+tqdm>=4.64
+
+# optional, only for plotting / notebooks
+matplotlib>=3.6
+seaborn>=0.12
