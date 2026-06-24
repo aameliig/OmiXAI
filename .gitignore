@@ -32,3 +32,9 @@ build/
 venv/
 .venv/
 logs/
+
+# OS / editor
+.DS_Store
+
+# rebuttal deliverables, not code
+*.docx
